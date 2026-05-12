@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import logging
+import os
 import re
 from dataclasses import dataclass
 from datetime import datetime
@@ -20,24 +21,24 @@ from converter import ConversionError, convert_dbc_to_dbf
 # =============================================================================
 
 # FTP do DATASUS. O PAPA fica no grupo SIASUS, pasta Dados.
-FTP_HOST = "ftp.datasus.gov.br"
-FTP_DIR = "/dissemin/publicos/SIASUS/200801_/Dados"
+FTP_HOST = os.getenv("FTP_HOST", "ftp.datasus.gov.br")
+FTP_DIR = os.getenv("FTP_DIR", "/dissemin/publicos/SIASUS/200801_/Dados")
 
 # Credenciais do FTP.
 # O DATASUS costuma aceitar acesso anonimo. Se houver credenciais internas,
 # preencha FTP_USER e FTP_PASSWORD.
-FTP_USER = "anonymous"
-FTP_PASSWORD = ""
+FTP_USER = os.getenv("FTP_USER", "anonymous")
+FTP_PASSWORD = os.getenv("FTP_PASSWORD", "")
 
 # Arquivos de interesse. Para 2026, os nomes atuais seguem PAPA2601.dbc,
 # PAPA2602.dbc, PAPA2603.dbc, e assim por diante.
 REMOTE_PATTERN = re.compile(r"^PAPA26(?P<mes>\d{2})\.dbc$", re.IGNORECASE)
 
 # Pasta local de trabalho. DBC e DBF ficam aqui durante o processamento.
-WORK_DIR = Path("dados_papa_work")
+WORK_DIR = Path(os.getenv("PAPA_WORK_DIR", "dados_papa_work"))
 
 # Pasta local onde a versao web guarda os CSVs gerados para download.
-WEB_OUTPUT_DIR = Path("dados_papa_saida")
+WEB_OUTPUT_DIR = Path(os.getenv("PAPA_OUTPUT_DIR", "dados_papa_saida"))
 
 # Filtro de Belem/PA. Codigo IBGE do municipio: 150140.
 # PA_UFMUN = municipio do estabelecimento/unidade.
@@ -64,7 +65,7 @@ DBF_ENCODING = "latin1"
 CSV_LINE_TERMINATOR = "\n"
 
 # Tamanho dos blocos na leitura do DBF. Mantem o uso de memoria controlado.
-CHUNK_SIZE = 50_000
+CHUNK_SIZE = int(os.getenv("PAPA_CHUNK_SIZE", "50000"))
 
 # Se True, o script para quando encontrar buraco na sequencia mensal.
 # Exemplo: existe PAPA2601 e PAPA2603, mas falta PAPA2602.

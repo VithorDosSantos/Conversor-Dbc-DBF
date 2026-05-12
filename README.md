@@ -82,3 +82,30 @@ topo do arquivo `automacao_papa_datasus.py`.
 
 Na versao web, o usuario escolhe onde salvar o CSV no momento do download pelo
 navegador.
+
+## Deploy
+
+A opcao recomendada para producao e Render com Docker, porque o backend precisa
+baixar e converter arquivos grandes antes de entregar os CSVs.
+
+Arquivos de deploy:
+
+- `Dockerfile`: builda o frontend React e executa o FastAPI com Uvicorn.
+- `render.yaml`: blueprint para criar o Web Service no Render.
+- `.dockerignore`: evita enviar bases DATASUS, CSVs, caches e `node_modules` para a imagem.
+- `.env.example`: lista as variaveis de ambiente usadas pelo app.
+
+Variaveis principais:
+
+```text
+FTP_HOST=ftp.datasus.gov.br
+FTP_DIR=/dissemin/publicos/SIASUS/200801_/Dados
+PAPA_WORK_DIR=/tmp/datasus-papa/work
+PAPA_OUTPUT_DIR=/tmp/datasus-papa/output
+MAX_MONTHS_PER_JOB=3
+MAX_UPLOAD_MB=512
+MAX_DOWNLOAD_AGE_HOURS=24
+```
+
+No Render, crie um novo Blueprint apontando para este repositorio ou crie um
+Web Service com ambiente Docker. O health check deve usar `/api/health`.

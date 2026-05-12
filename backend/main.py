@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import shutil
+import os
 import sys
 import tempfile
 import zipfile
 from concurrent.futures import Future, ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from threading import Lock
 from typing import Any
@@ -13,6 +14,7 @@ from typing import Any
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -24,6 +26,10 @@ from automacao_papa_datasus import WEB_OUTPUT_DIR, list_available_papa_files, pr
 
 
 app = FastAPI(title="Conversor DBC para DBF", version="1.0.0")
+FRONTEND_DIST_DIR = ROOT_DIR / "frontend" / "dist"
+MAX_MONTHS_PER_JOB = int(os.getenv("MAX_MONTHS_PER_JOB", "6"))
+MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "512"))
+MAX_DOWNLOAD_AGE_HOURS = int(os.getenv("MAX_DOWNLOAD_AGE_HOURS", "24"))
 executor = ThreadPoolExecutor(max_workers=1)
 job_lock = Lock()
 automation_future: Future | None = None
@@ -44,7 +50,7 @@ class AutomationStartRequest(BaseModel):
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=os.getenv("CORS_ALLOW_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(","),
     allow_credentials=False,
     allow_methods=["POST", "GET"],
     allow_headers=["*"],
@@ -105,11 +111,14 @@ def start_automation(payload: AutomationStartRequest) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="Selecione pelo menos um PAPA para processar.")
     if any(month < 1 or month > 12 for month in months):
         raise HTTPException(status_code=400, detail="Mes invalido na selecao.")
+    if len(months) > MAX_MONTHS_PER_JOB:
+        raise HTTPException(status_code=400, detail=f"Selecione no maximo {MAX_MONTHS_PER_JOB} mes(es) por processamento.")
 
     with job_lock:
         if automation_future and not automation_future.done():
             return public_job_response()
 
+        cleanup_old_outputs()
         job_id = datetime.now().strftime("%Y%m%d_%H%M%S")
         output_dir = WEB_OUTPUT_DIR / job_id
         automation_job.update(
@@ -178,6 +187,35 @@ def resolve_download_file(filename: str) -> Path:
     return candidate
 
 
+def cleanup_old_outputs() -> None:
+    if not WEB_OUTPUT_DIR.exists():
+        return
+
+    cutoff = datetime.now() - timedelta(hours=MAX_DOWNLOAD_AGE_HOURS)
+    for path in WEB_OUTPUT_DIR.iterdir():
+        try:
+            modified_at = datetime.fromtimestamp(path.stat().st_mtime)
+            if modified_at >= cutoff:
+                continue
+            if path.is_dir():
+                shutil.rmtree(path, ignore_errors=True)
+            elif path.is_file():
+                path.unlink(missing_ok=True)
+        except OSError:
+            continue
+
+
+async def save_upload_with_limit(file: UploadFile, destination: Path) -> None:
+    max_bytes = MAX_UPLOAD_MB * 1024 * 1024
+    written = 0
+    with destination.open("wb") as output:
+        while chunk := await file.read(1024 * 1024):
+            written += len(chunk)
+            if written > max_bytes:
+                raise HTTPException(status_code=413, detail=f"Arquivo maior que o limite de {MAX_UPLOAD_MB} MB.")
+            output.write(chunk)
+
+
 @app.get("/api/automation/download/{filename}")
 def download_automation_file(filename: str) -> FileResponse:
     file_path = resolve_download_file(filename)
@@ -196,10 +234,11 @@ async def convert_file(background_tasks: BackgroundTasks, file: UploadFile = Fil
     output_path = input_path.with_suffix(".dbf")
 
     try:
-        with input_path.open("wb") as destination:
-            shutil.copyfileobj(file.file, destination)
-
+        await save_upload_with_limit(file, input_path)
         result = convert_dbc_to_dbf(input_path, output_path)
+    except HTTPException:
+        shutil.rmtree(work_dir, ignore_errors=True)
+        raise
     except ConversionError as exc:
         shutil.rmtree(work_dir, ignore_errors=True)
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -216,3 +255,20 @@ async def convert_file(background_tasks: BackgroundTasks, file: UploadFile = Fil
         media_type="application/octet-stream",
         background=background_tasks,
     )
+
+
+if FRONTEND_DIST_DIR.exists():
+    assets_dir = FRONTEND_DIST_DIR / "assets"
+    if assets_dir.exists():
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+
+    @app.get("/{full_path:path}")
+    def serve_frontend(full_path: str) -> FileResponse:
+        if full_path.startswith("api/"):
+            raise HTTPException(status_code=404, detail="Endpoint nao encontrado.")
+
+        requested = (FRONTEND_DIST_DIR / full_path).resolve()
+        if FRONTEND_DIST_DIR.resolve() in requested.parents and requested.is_file():
+            return FileResponse(requested)
+
+        return FileResponse(FRONTEND_DIST_DIR / "index.html")

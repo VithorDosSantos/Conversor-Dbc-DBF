@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: datasus-papa
+    runtime: docker
+    plan: starter
+    autoDeployTrigger: commit
+    healthCheckPath: /api/health
+    envVars:
+      - key: FTP_HOST
+        value: ftp.datasus.gov.br
+      - key: FTP_DIR
+        value: /dissemin/publicos/SIASUS/200801_/Dados
+      - key: PAPA_WORK_DIR
+        value: /tmp/datasus-papa/work
+      - key: PAPA_OUTPUT_DIR
+        value: /tmp/datasus-papa/output
+      - key: MAX_MONTHS_PER_JOB
+        value: "3"
+      - key: MAX_UPLOAD_MB
+        value: "512"
+      - key: MAX_DOWNLOAD_AGE_HOURS
+        value: "24"
